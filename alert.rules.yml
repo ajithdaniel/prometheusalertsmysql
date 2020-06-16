@@ -1,0 +1,147 @@
+groups:
+- name: mysql.yml
+  rules:
+  - record: mysql_slave_lag_seconds
+    expr: mysql_slave_status_seconds_behind_master - mysql_slave_status_sql_delay
+  - record: mysql_heartbeat_lag_seconds
+    expr: mysql_heartbeat_now_timestamp_seconds - mysql_heartbeat_stored_timestamp_seconds
+  - record: job:mysql_transactions:rate5m
+    expr: sum without(command) (rate(mysql_global_status_commands_total{command=~"(commit|rollback)"}[5m]))
+  - record: job:mysql_transactions:rate5m:avg_over_time_1w
+    expr: avg_over_time(job:mysql_transactions:rate5m[1w])
+  - record: job:mysql_transactions:rate5m:stddev_over_time_1w
+    expr: stddev_over_time(job:mysql_transactions:rate5m[1w])
+  - record: job:mysql_transactions:rate5m_prediction
+    expr: quantile(0.5,label_replace(avg_over_time(job:mysql_transactions:rate5m[4h] offset 166h) + job:mysql_transactions:rate5m:avg_over_time_1w - job:mysql_transactions:rate5m:avg_over_time_1w offset 1w, 'offset', '1w', '', '') or label_replace(avg_over_time(job:mysql_transactions:rate5m[4h] offset 334h) + job:mysql_transactions:rate5m:avg_over_time_1w - job:mysql_transactions:rate5m:avg_over_time_1w offset 2w, 'offset', '2w', '', '') or label_replace(avg_over_time(job:mysql_transactions:rate5m[4h] offset 502h) + job:mysql_transactions:rate5m:avg_over_time_1w - job:mysql_transactions:rate5m:avg_over_time_1w offset 3w, 'offset', '3w', '', '')) without (offset)
+  - alert: MySQLReplicationDown
+    expr: mysql_slave_status_slave_io_running == 0 or mysql_slave_status_slave_sql_running
+      == 0
+    for: 5s
+    labels:
+      severity: critical
+    annotations:
+      description: Slave replication (IO or SQL) has been down for more than 2 minutes.
+      summary: Slave replication is stopped
+  - alert: MySQLReplicationLag
+    expr: (mysql_slave_lag_seconds{instance !~ ".*perf.*|.*backup.*|.*lytic.*"} > 30) and on(instance) (predict_linear(mysql_slave_lag_seconds[5m],
+      60 * 2) > 0)
+    for: 1m
+    labels:
+      severity: critical
+    annotations:
+      description: The mysql slave replication has fallen behind and is not recovering
+      summary: Slave is {{$value}} seconds behind with master.
+  - alert: MySQLInnoDBLogWaits
+    expr: rate(mysql_global_status_innodb_log_waits[5m]) > 5
+    labels:
+      severity: warning
+    annotations:
+      description: The innodb logs are waiting for disk at a rate of {{$value}}
+        second
+      summary: MySQL innodb log writes stalling
+  - alert: Load Average based on CPU Count
+    expr: node_load1 / count by (instance, job) (node_cpu{mode="idle"}) >= 0.95
+    labels:
+      severity: warning
+    annotations:
+      description: Load average is {{$value}}.Please check the instance ASAP.
+      summary: Load average is critical
+  - alert: ActiveConnectionIncreased
+    expr: (mysql_global_status_threads_running / mysql_global_variables_max_connections *100 > 10) or rate(mysql_global_status_threads_running[5m]) > 5
+    labels:
+      severity: warning
+    annotations:
+      description: 'Active connections increased more than {{$value}}%. Please check this '
+      summary: Active Connection Increased
+  - alert: TotalConnections
+    expr: (mysql_global_status_threads_connected / mysql_global_variables_max_connections ) * 100 > 50
+    labels:
+      severity: warning
+    annotations:
+      description: 'Total connections is {{$value}}%. Please check this '
+      summary: Total Connection is more than 50%
+  - alert: HistoryLengthIncreased
+    expr: rate(mysql_global_status_innodb_history_list_length[5m]) > 1000
+    labels:
+      severity: warning
+    annotations:
+      description: 'History Length Increased more than {{$value}}%. Please check this '
+      summary: History Length Increased
+  - alert: UptimeCritical
+    expr: mysql_global_status_uptime < 180
+    labels:
+      severity: warning
+    annotations:
+      description: 'Uptime is {{$value}} seconds. Please check this '
+      summary: MySQL Restarted
+  - alert: CPU Utilization
+    expr: 100 - (avg by(instance) (irate(node_cpu{mode="idle"}[2m])) * 100) > 30
+    labels:
+      severity: warning
+    annotations:
+      description: 'CPU Usage is {{$value}} %. Please check this '
+      summary: CPU Usage is more than 30 percent.
+  - alert: ThreadCacheMisses
+    expr: mysql_global_status_threads_created/mysql_global_status_connections > 1
+    labels:
+      severity: warning
+    annotations:
+      description: 'threads_created/connections is more than {{$value}}% Please tune thread_cache_size'
+      summary: Thread Cache Missed
+  - alert: Azure Replication Down
+    expr: mysql_slave_status_slave_io_running{instance=~".*prod-ola-azure.*"}== 0 or mysql_slave_status_slave_sql_running{instance=~".*prod-ola-azure.*"}== 0
+    for: 1m
+    labels:
+      severity: critical
+    annotations:
+      description: Slave replication (IO or SQL) has been down for more than 2 minutes.
+      summary: Slave replication is stopped
+  - alert: Azure MySQL Uptime
+    expr: mysql_global_status_uptime{instance=~".*prod-ola-azure.*"} < 180
+    labels:
+      severity: warning
+    annotations:
+      description: 'Uptime is {{$value}} seconds. Please check this '
+      summary: MySQL Restarted
+  - alert: MySQL Instance Down
+    expr: up{job="mysql"}==0
+    labels:
+      severity: warning
+    annotations:
+      description: 'MySQL Down on the instance or Check Node Exporter is running or not'
+      summary: MySQL Instance Down
+  - alert: MongoDB Instance Down
+    expr: up{job="mongodb"}==0
+    labels:
+      severity: warning
+    annotations:
+      description: 'MongoDB Down on the instance or Check Node Exporter is running or not'
+      summary: MongoDB Instance Down
+  - alert: DiskIOUtilization
+    expr: irate(node_disk_io_time_ms{device!~"dm-0|xvda"}[2m]) / 10 > 30
+    labels:
+      severity: warning
+    annotations:
+      description: 'Disk Utilization is {{$value}}%. Please check ASAP'
+      summary: Disk Utilization is more in the master 30 percent
+  - alert: TimescaleDB Down
+    expr: pg_up{job="postgresql",instance=~".*timescaledb.*"} == 0
+    labels:
+      severity: warning
+    annotations:
+      description: 'TimescaleDB is Down'
+      summary: TimescaleDB is Down
+  - alert: TimescaleDB Instance Down
+    expr: up{job="postgresql",instance=~".*timescaledb.*"} == 0
+    labels:
+      severity: warning
+    annotations:
+      description: 'TimescaleDB Instance is Down'
+      summary: TimescaleDB Instance is Down
+  - alert: TimescaleDB Memory Alerts
+    expr: 100 - (node_memory_MemAvailable{job="postgresql",instance=~".*timescaledb.*"}  or (node_memory_MemFree{job="postgresql",instance=~".*timescaledb.*"} + node_memory_Buffers{job="postgresql",instance=~".*timescaledb.*"} + node_memory_Cached{job="postgresql",instance=~".*timescaledb.*"})) / node_memory_MemTotal{job="postgresql",instance=~".*timescaledb.*"} * 100 > 75
+    labels:
+      severity: warning
+    annotations:
+      description: 'Memory Usage Critcal is more than 75%'
+      summary: Memory Usage Critcal is more than 75%
